@@ -1,0 +1,85 @@
+#include "polygon.h"
+
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <sstream>
+#include <stdexcept>
+
+Polygon read_polygon_csv(const std::string& filename) {
+    std::ifstream fin(filename);
+    if (!fin) {
+        throw std::runtime_error("Failed to open input file: " + filename);
+    }
+
+    std::string line;
+    if (!std::getline(fin, line)) {
+        throw std::runtime_error("Input file is empty.");
+    }
+
+    // Expect header: ring_id,vertex_id,x,y
+    std::map<int, Ring> ring_map;
+
+    while (std::getline(fin, line)) {
+        if (line.empty()) {
+            continue;
+        }
+
+        std::stringstream ss(line);
+        std::string token;
+
+        int ring_id = 0;
+        int vertex_id = 0;
+        double x = 0.0;
+        double y = 0.0;
+
+        std::getline(ss, token, ',');
+        ring_id = std::stoi(token);
+
+        std::getline(ss, token, ',');
+        vertex_id = std::stoi(token);
+
+        std::getline(ss, token, ',');
+        x = std::stod(token);
+
+        std::getline(ss, token, ',');
+        y = std::stod(token);
+
+        if (ring_map.find(ring_id) == ring_map.end()) {
+            Ring ring;
+            ring.ring_id = ring_id;
+            ring_map[ring_id] = ring;
+        }
+
+        (void)vertex_id; // used only to read format correctly
+        ring_map[ring_id].vertices.push_back({x, y});
+    }
+
+    Polygon polygon;
+    for (const auto& [id, ring] : ring_map) {
+        polygon.rings.push_back(ring);
+    }
+
+    return polygon;
+}
+
+void print_polygon_csv(const Polygon& polygon) {
+    std::cout << "ring_id,vertex_id,x,y\n";
+
+    for (const Ring& ring : polygon.rings) {
+        for (std::size_t i = 0; i < ring.vertices.size(); ++i) {
+            std::cout << ring.ring_id << ","
+                      << i << ","
+                      << ring.vertices[i].x << ","
+                      << ring.vertices[i].y << "\n";
+        }
+    }
+}
+
+int total_vertex_count(const Polygon& polygon) {
+    int total = 0;
+    for (const Ring& ring : polygon.rings) {
+        total += static_cast<int>(ring.vertices.size());
+    }
+    return total;
+}
