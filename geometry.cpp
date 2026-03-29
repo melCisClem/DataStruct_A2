@@ -3,6 +3,11 @@
 #include <algorithm>
 #include <cmath>
 
+/**
+ * Calculates the signed area of a polygonal ring using the Shoelace Formula.
+ * Counter-clockwise (CCW) orientation returns a positive area.
+ * Clockwise (CW) orientation returns a negative area.
+ */
 double signed_ring_area(const Ring& ring) {
     const std::size_t n = ring.vertices.size();
     if (n < 3) {
@@ -19,6 +24,10 @@ double signed_ring_area(const Ring& ring) {
     return 0.5 * area2;
 }
 
+/**
+ * Calculates the total signed area of a polygon by summing the signed areas of all its rings.
+ * Following GIS conventions, the exterior ring is usually CCW (+) and holes are CW (-).
+ */
 double total_signed_area(const Polygon& polygon) {
     double total = 0.0;
     for (const Ring& ring : polygon.rings) {
@@ -27,19 +36,32 @@ double total_signed_area(const Polygon& polygon) {
     return total;
 }
 
+/**
+ * Computes the 2D cross product of vectors (b-a) and (c-a).
+ * Used to determine the relative orientation of three points.
+ */
 double cross(const Point& a, const Point& b, const Point& c) {
-    // (b-a) x (c-a)
     return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
 }
 
+/**
+ * Checks if two doubles are equal within a small floating-point epsilon.
+ */
 bool almost_equal(double a, double b, double eps) {
     return std::fabs(a - b) <= eps;
 }
 
+/**
+ * Checks if two points are identical within a small epsilon.
+ */
 bool same_point(const Point& a, const Point& b, double eps) {
     return almost_equal(a.x, b.x, eps) && almost_equal(a.y, b.y, eps);
 }
 
+/**
+ * Checks if point p lies on the line segment defined by endpoints a and b.
+ * Includes a check for collinearity and bounding box containment.
+ */
 bool point_on_segment(const Point& p, const Point& a, const Point& b) {
     if (!almost_equal(cross(a, b, p), 0.0)) {
         return false;
@@ -54,6 +76,10 @@ bool point_on_segment(const Point& p, const Point& a, const Point& b) {
            p.y >= min_y && p.y <= max_y;
 }
 
+/**
+ * Determines if line segments (a,b) and (c,d) intersect.
+ * Uses the straddle test for proper intersections and handles collinear/touching cases.
+ */
 bool segments_intersect(const Point& a, const Point& b,
                         const Point& c, const Point& d) {
     const double ab_c = cross(a, b, c);
@@ -61,18 +87,18 @@ bool segments_intersect(const Point& a, const Point& b,
     const double cd_a = cross(c, d, a);
     const double cd_b = cross(c, d, b);
 
-    // Proper intersection
+    // Check if segments properly straddle each other (cross each other)
     const bool ab_straddles =
-    (((ab_c > EPS) && (ab_d < -EPS)) || ((ab_c < -EPS) && (ab_d > EPS)));
+        (((ab_c > EPS) && (ab_d < -EPS)) || ((ab_c < -EPS) && (ab_d > EPS)));
 
-const bool cd_straddles =
-    (((cd_a > EPS) && (cd_b < -EPS)) || ((cd_a < -EPS) && (cd_b > EPS)));
+    const bool cd_straddles =
+        (((cd_a > EPS) && (cd_b < -EPS)) || ((cd_a < -EPS) && (cd_b > EPS)));
 
-if (ab_straddles && cd_straddles) {
-    return true;
-}
+    if (ab_straddles && cd_straddles) {
+        return true;
+    }
 
-    // Collinear / touching cases
+    // Check for collinearity and overlapping segments or touching endpoints
     if (almost_equal(ab_c, 0.0) && point_on_segment(c, a, b)) return true;
     if (almost_equal(ab_d, 0.0) && point_on_segment(d, a, b)) return true;
     if (almost_equal(cd_a, 0.0) && point_on_segment(a, c, d)) return true;
@@ -81,6 +107,9 @@ if (ab_straddles && cd_straddles) {
     return false;
 }
 
+/**
+ * Checks if a ring has at least the minimum number of vertices to remain a valid polygon.
+ */
 bool ring_has_minimum_vertices(const Ring& ring, int min_vertices) {
     return static_cast<int>(ring.vertices.size()) >= min_vertices;
 }
