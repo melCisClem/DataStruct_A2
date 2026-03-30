@@ -3,14 +3,10 @@
 #include "polygon.h"
 
 #include <cmath>
-#include <iostream>
 #include <queue>
 #include <vector>
 
 namespace {
-
-// Set to false for production to suppress debug output on stderr
-constexpr bool DEBUG_LOG = false;
 
 /**
  * Representation of a candidate collapse in the Priority Queue.
@@ -29,7 +25,15 @@ struct PQCandidate {
  */
 struct CandidateCompare {
     bool operator()(const PQCandidate& a, const PQCandidate& b) const {
-        return a.displacement > b.displacement;
+        if (std::fabs(a.displacement - b.displacement) > EPS) {
+            return a.displacement > b.displacement;
+        }
+
+        if (a.ring_idx != b.ring_idx) {
+            return a.ring_idx > b.ring_idx;
+        }
+
+        return a.start_index > b.start_index;
     }
 };
 
@@ -38,13 +42,13 @@ struct CandidateCompare {
  * Replaces vertices at (A+1) and (A+2) with point E.
  */
 Ring make_collapsed_ring(const Ring& ring, const CollapseCandidate& c) {
-    Ring out;
-    out.ring_id = ring.ring_id;
-
     const int n = static_cast<int>(ring.vertices.size());
     if (!c.valid || n < 4) {
         return ring;
     }
+
+    Ring out;
+    out.ring_id = ring.ring_id;
 
     const int A = c.start_index % n;
     const int B = (A + 1) % n;
@@ -54,14 +58,12 @@ Ring make_collapsed_ring(const Ring& ring, const CollapseCandidate& c) {
 
     for (int i = 0; i < n; ++i) {
         if (i == B || i == C) {
-            continue; // Remove original middle vertices
+            continue;
         }
 
+        out.vertices.push_back(ring.vertices[i]);
         if (i == A) {
-            out.vertices.push_back(ring.vertices[A]);
-            out.vertices.push_back(c.e); // Insert area-preserving vertex E
-        } else {
-            out.vertices.push_back(ring.vertices[i]);
+            out.vertices.push_back(c.e);
         }
     }
 
@@ -69,7 +71,7 @@ Ring make_collapsed_ring(const Ring& ring, const CollapseCandidate& c) {
 }
 
 /**
- * Standard Ray-Casting algorithm to check if a point lies inside a ring.
+ * Standard ray-casting algorithm to check if a point lies inside a ring.
  */
 bool point_in_ring(const Point& p, const Ring& ring) {
     bool inside = false;
@@ -92,50 +94,52 @@ bool point_in_ring(const Point& p, const Ring& ring) {
 }
 
 /**
- * Checks if all vertices of the inner ring are contained within the outer ring.
- * Used to maintain polygon topology (holes staying inside the exterior).
+ * Checks whether an inner ring lies inside an outer ring.
+ * A single point is enough here because rings are assumed valid/simple and
+ * intersection checks are handled elsewhere.
  */
 bool ring_inside_ring(const Ring& inner, const Ring& outer) {
-    for (const Point& p : inner.vertices) {
-        if (!point_in_ring(p, outer)) {
-            return false;
-        }
+    if (inner.vertices.empty()) {
+        return false;
     }
-    return true;
+    return point_in_ring(inner.vertices[0], outer);
 }
 
 /**
  * Calculates the local areal displacement for a segment collapse A-B-C-D -> A-E-D.
- * This is the sum of the areas of triangles formed by the old and new edges.
  */
 double exact_local_displacement(const Point& A,
                                 const Point& B,
                                 const Point& C,
                                 const Point& D,
-                                const Point& /*E*/) {
-    return std::fabs(triangle_signed_area(A, B, C) + triangle_signed_area(A, C, D));
+                                const Point& E) {
+    if (std::fabs(cross(A, B, E)) < EPS) {
+        return triangle_area_abs(E, B, C) +
+               triangle_area_abs(E, C, D);
+    }
+
+    if (std::fabs(cross(C, D, E)) < EPS) {
+        return triangle_area_abs(A, B, E) +
+               triangle_area_abs(B, C, E);
+    }
+
+    return triangle_area_abs(A, B, E) +
+           triangle_area_abs(B, C, E) +
+           triangle_area_abs(C, D, E);
 }
+
 } // namespace
 
-/**
- * Calculates the signed area of triangle (a,b,c).
- */
 double triangle_signed_area(const Point& a, const Point& b, const Point& c) {
     return 0.5 * ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
 }
 
-/**
- * Calculates the absolute area of triangle (a,b,c).
- */
 double triangle_area_abs(const Point& a, const Point& b, const Point& c) {
     return std::fabs(triangle_signed_area(a, b, c));
 }
 
 /**
  * Computes a candidate point E that preserves the area of the segment A-B-C-D.
- * The point E is placed on a line parallel to AD such that Area(AED) = Area(ABCD).
- * To minimize displacement, E is placed on the extension of either AB or CD,
- * whichever vertex (B or C) is further from the line AD.
  */
 CollapseCandidate compute_collapse_candidate(const Ring& ring, int start_index) {
     CollapseCandidate candidate{};
@@ -150,10 +154,10 @@ CollapseCandidate compute_collapse_candidate(const Ring& ring, int start_index) 
     const Point& C = ring.vertices[(start_index + 2) % n];
     const Point& D = ring.vertices[(start_index + 3) % n];
 
-    // Total signed area of the quadrilateral ABCD
-    const double area_abcd = triangle_signed_area(A, B, C) + triangle_signed_area(A, C, D);
-    
-    // Signed areas of triangles formed with the base AD
+    const double area_abcd =
+        triangle_signed_area(A, B, C) +
+        triangle_signed_area(A, C, D);
+
     const double area_abd = triangle_signed_area(A, B, D);
     const double area_acd = triangle_signed_area(A, C, D);
 
@@ -165,36 +169,51 @@ CollapseCandidate compute_collapse_candidate(const Ring& ring, int start_index) 
         return candidate;
     }
 
-    Point E;
-    // Pick the peak vertex furthest from AD to minimize displacement
-    if (std::fabs(area_abd) >= std::fabs(area_acd)) {
-        if (std::fabs(area_abd) < EPS) {
-            // All points nearly collinear
-            E = Point{ (A.x + D.x) * 0.5, (A.y + D.y) * 0.5 };
-        } else {
-            // E lies on the line passing through AB
-            const double t = area_abcd / area_abd;
-            E = Point{ A.x + t * (B.x - A.x), A.y + t * (B.y - A.y) };
+    bool found = false;
+    Point best_E{};
+    double best_disp = 0.0;
+
+    // Candidate 1: E lies on the LINE through AB
+    if (std::fabs(area_abd) >= EPS) {
+        const double t_ab = area_abcd / area_abd;
+
+        Point E_ab{
+            A.x + t_ab * (B.x - A.x),
+            A.y + t_ab * (B.y - A.y)
+        };
+
+        const double disp_ab = exact_local_displacement(A, B, C, D, E_ab);
+        best_E = E_ab;
+        best_disp = disp_ab;
+        found = true;
+    }
+
+    // Candidate 2: E lies on the LINE through CD
+    if (std::fabs(area_acd) >= EPS) {
+        const double t_cd = area_abcd / area_acd;
+
+        Point E_cd{
+            D.x + t_cd * (C.x - D.x),
+            D.y + t_cd * (C.y - D.y)
+        };
+
+        const double disp_cd = exact_local_displacement(A, B, C, D, E_cd);
+
+        if (!found || disp_cd < best_disp) {
+            best_E = E_cd;
+            best_disp = disp_cd;
+            found = true;
         }
-    } else {
-        // E lies on the line passing through CD
-        const double t = area_abcd / area_acd;
-        E = Point{ D.x + t * (C.x - D.x), D.y + t * (C.y - D.y) };
+    }
+
+    if (!found) {
+        return candidate;
     }
 
     candidate.valid = true;
-    candidate.e = E;
+    candidate.e = best_E;
     candidate.start_index = start_index;
-    candidate.areal_displacement = exact_local_displacement(A, B, C, D, E);
-
-    if (DEBUG_LOG) {
-        std::cerr << "[DEBUG] ring " << ring.ring_id
-                  << " area_abcd=" << area_abcd
-                  << " |AD|=" << std::sqrt(len_sq) << "\n";
-        std::cerr << "[DEBUG] ring " << ring.ring_id
-                  << " E=(" << E.x << ", " << E.y << ")"
-                  << " displacement=" << candidate.areal_displacement << "\n";
-    }
+    candidate.areal_displacement = best_disp;
 
     return candidate;
 }
@@ -203,20 +222,34 @@ CollapseCandidate compute_collapse_candidate(const Ring& ring, int start_index) 
  * Modifies the ring in-place to apply the chosen collapse.
  */
 void apply_collapse(Ring& ring, const CollapseCandidate& c) {
-    if (!c.valid) return;
+    if (!c.valid) {
+        return;
+    }
+
     const int n = static_cast<int>(ring.vertices.size());
-    if (n < 4) return;
+    if (n < 4) {
+        return;
+    }
+
     const int A = c.start_index % n;
     const int B = (A + 1) % n;
     const int C = (A + 2) % n;
-    std::vector<Point> nv;
-    nv.reserve(n - 1);
+
+    std::vector<Point> new_vertices;
+    new_vertices.reserve(n - 1);
+
     for (int i = 0; i < n; ++i) {
-        if (i == B || i == C) continue;
-        nv.push_back(ring.vertices[i]);
-        if (i == A) nv.push_back(c.e);
+        if (i == B || i == C) {
+            continue;
+        }
+
+        new_vertices.push_back(ring.vertices[i]);
+        if (i == A) {
+            new_vertices.push_back(c.e);
+        }
     }
-    ring.vertices = std::move(nv);
+
+    ring.vertices = std::move(new_vertices);
 }
 
 bool is_valid_collapse(const Ring& ring, const CollapseCandidate& c) {
@@ -235,22 +268,22 @@ bool is_valid_collapse(const Ring& ring, const CollapseCandidate& c) {
     const Point e = c.e;
 
     for (int i = 0; i < n; ++i) {
+        // Skip edges adjacent to the collapsed region:
+        // (A-1,A), (A,B), (B,C), (C,D), (D,D+1)
+        if (i == (A - 1 + n) % n || i == A || i == B || i == C || i == D) {
+            continue;
+        }
+
         const int j = (i + 1) % n;
+        const Point& p = ring.vertices[i];
+        const Point& q = ring.vertices[j];
 
-        // Skip only the three edges being removed: (A,B), (B,C), (C,D)
-        if ((i == A && j == B) || (i == B && j == C) || (i == C && j == D))
-            continue;
-
-        const Point p = ring.vertices[i];
-        const Point q = ring.vertices[j];
-
-        // Skip edges that share vertex A or D (adjacent to new edges)
-        if (same_point(p, a) || same_point(p, d) || same_point(q, a) || same_point(q, d))
-            continue;
-
-        // Check if new segments AE or ED intersect any existing edge
-        if (segments_intersect(a, e, p, q)) return false;
-        if (segments_intersect(e, d, p, q)) return false;
+        if (segments_intersect(a, e, p, q)) {
+            return false;
+        }
+        if (segments_intersect(e, d, p, q)) {
+            return false;
+        }
     }
 
     return true;
@@ -259,7 +292,7 @@ bool is_valid_collapse(const Ring& ring, const CollapseCandidate& c) {
 /**
  * Global validity check for a collapse candidate.
  * Ensures no self-intersection, no intersection with other rings,
- * and preserves containment (holes staying inside the exterior).
+ * and preserves containment.
  */
 bool is_valid_collapse_global(const Polygon& poly, int ring_idx, const CollapseCandidate& c) {
     const Ring& ring = poly.rings[ring_idx];
@@ -276,14 +309,14 @@ bool is_valid_collapse_global(const Polygon& poly, int ring_idx, const CollapseC
     const Point d = ring.vertices[D];
     const Point e = c.e;
 
-    // 1. Same-ring self-intersection check
     if (!is_valid_collapse(ring, c)) {
         return false;
     }
 
-    // 2. Cross-ring intersection checks
     for (int r = 0; r < static_cast<int>(poly.rings.size()); ++r) {
-        if (r == ring_idx) continue;
+        if (r == ring_idx) {
+            continue;
+        }
 
         const Ring& other = poly.rings[r];
         const int m = static_cast<int>(other.vertices.size());
@@ -293,23 +326,24 @@ bool is_valid_collapse_global(const Polygon& poly, int ring_idx, const CollapseC
             const Point& p = other.vertices[i];
             const Point& q = other.vertices[j];
 
-            if (segments_intersect(a, e, p, q)) return false;
-            if (segments_intersect(e, d, p, q)) return false;
+            if (segments_intersect(a, e, p, q)) {
+                return false;
+            }
+            if (segments_intersect(e, d, p, q)) {
+                return false;
+            }
         }
     }
 
-    // 3. Containment checks using the temporary UPDATED ring
     Ring changed_ring = make_collapsed_ring(ring, c);
 
     if (ring_idx == 0) {
-        // Outer ring changed: ensure all holes still lie inside it
         for (int r = 1; r < static_cast<int>(poly.rings.size()); ++r) {
             if (!ring_inside_ring(poly.rings[r], changed_ring)) {
                 return false;
             }
         }
     } else {
-        // Hole changed: ensure it still lies inside the exterior ring
         if (!ring_inside_ring(changed_ring, poly.rings[0])) {
             return false;
         }
@@ -320,34 +354,26 @@ bool is_valid_collapse_global(const Polygon& poly, int ring_idx, const CollapseC
 
 /**
  * Main simplification loop.
- * Uses a priority queue to iteratively apply the best (lowest displacement) collapse
- * until the target vertex count is reached or no valid collapses remain.
  */
 Polygon simplify_polygon(const Polygon& input, int target_vertices, double& areal_displacement) {
     areal_displacement = 0.0;
 
     Polygon output = input;
-    // Track versions of each ring to detect stale candidates in the PQ
     std::vector<unsigned> ring_versions(output.rings.size(), 0);
 
-    if (DEBUG_LOG) {
-        std::cerr << "[DEBUG] Target vertices: " << target_vertices << "\n";
-        std::cerr << "[DEBUG] Total input vertices: " << total_vertex_count(input) << "\n";
-    }
-
-    // Priority Queue stores all potential collapses across all rings
     std::priority_queue<PQCandidate, std::vector<PQCandidate>, CandidateCompare> pq;
 
-    // Helper to calculate and push all possible collapses for a specific ring
     auto push_ring_candidates = [&](int ring_idx) {
         Ring& ring = output.rings[ring_idx];
-        if (ring.vertices.size() < 4) {
+        if (ring.vertices.size() <= 3) {
             return;
         }
 
         for (int i = 0; i < static_cast<int>(ring.vertices.size()); ++i) {
             CollapseCandidate c = compute_collapse_candidate(ring, i);
-            if (!c.valid) continue;
+            if (!c.valid) {
+                continue;
+            }
 
             pq.push(PQCandidate{
                 c.areal_displacement,
@@ -358,12 +384,10 @@ Polygon simplify_polygon(const Polygon& input, int target_vertices, double& area
         }
     };
 
-    // Initial population of the Priority Queue
     for (int r = 0; r < static_cast<int>(output.rings.size()); ++r) {
         push_ring_candidates(r);
     }
 
-    // Main greedy simplification loop
     while (total_vertex_count(output) > target_vertices && !pq.empty()) {
         PQCandidate top = pq.top();
         pq.pop();
@@ -372,50 +396,47 @@ Polygon simplify_polygon(const Polygon& input, int target_vertices, double& area
             continue;
         }
 
-        // Skip if the ring has been modified since this candidate was added
         if (top.ring_version != ring_versions[top.ring_idx]) {
-            continue; 
-        }
-
-        Ring& ring = output.rings[top.ring_idx];
-        if (ring.vertices.size() < 4) {
             continue;
         }
 
-        // Recompute the candidate to get the exact point E and validity
+        Ring& ring = output.rings[top.ring_idx];
+        if (ring.vertices.size() <= 3) {
+            continue;
+        }
+
         CollapseCandidate c = compute_collapse_candidate(ring, top.start_index);
         if (!c.valid) {
             continue;
         }
 
-        // Perform final topological checks
+        if (!is_valid_collapse(ring, c)) {
+            continue;
+        }
+
         if (!is_valid_collapse_global(output, top.ring_idx, c)) {
             continue;
         }
 
-        if (DEBUG_LOG) {
-            std::cerr << "[DEBUG] Applying best collapse on ring "
-                      << ring.ring_id
-                      << " with displacement = " << c.areal_displacement
-                      << "\n";
-        }
-
-        // Apply the collapse and increment ring version
         apply_collapse(ring, c);
         areal_displacement += c.areal_displacement;
         ring_versions[top.ring_idx]++;
 
-        if (DEBUG_LOG) {
-            std::cerr << "[DEBUG] Total vertices after collapse: "
-                      << total_vertex_count(output) << "\n";
+        const int new_n = static_cast<int>(ring.vertices.size());
+        for (int offset = -3; offset <= 3; ++offset) {
+            int idx = (top.start_index + offset + new_n) % new_n;
+            CollapseCandidate new_c = compute_collapse_candidate(ring, idx);
+            if (!new_c.valid) {
+                continue;
+            }
+
+            pq.push(PQCandidate{
+                new_c.areal_displacement,
+                top.ring_idx,
+                idx,
+                ring_versions[top.ring_idx]
+            });
         }
-
-        // Re-push updated candidates for the affected ring only (incremental update)
-        push_ring_candidates(top.ring_idx);
-    }
-
-    if (DEBUG_LOG && total_vertex_count(output) > target_vertices) {
-        std::cerr << "[DEBUG] No valid collapse found. Stopping.\n";
     }
 
     return output;
