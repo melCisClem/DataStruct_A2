@@ -1,3 +1,4 @@
+#include <iomanip>
 #include "polygon.h"
 
 #include <fstream>
@@ -75,13 +76,14 @@ Polygon read_polygon_csv(const std::string& filename) {
  */
 void print_polygon_csv(const Polygon& polygon) {
     std::cout << "ring_id,vertex_id,x,y\n";
+    std::cout << std::fixed << std::setprecision(10);
 
     for (const Ring& ring : polygon.rings) {
         for (std::size_t i = 0; i < ring.vertices.size(); ++i) {
             std::cout << ring.ring_id << ","
                       << i << ","
-                      << ring.vertices[i].x << ","
-                      << ring.vertices[i].y << "\n";
+                      << std::setprecision(9) << ring.vertices[i].x << ","
+                      << std::setprecision(9) << ring.vertices[i].y << "\n";
         }
     }
 }

@@ -10,7 +10,7 @@
 namespace {
 
 // Set to false for production to suppress debug output on stderr
-constexpr bool DEBUG_LOG = true;
+constexpr bool DEBUG_LOG = false;
 
 /**
  * Representation of a candidate collapse in the Priority Queue.
@@ -112,12 +112,9 @@ double exact_local_displacement(const Point& A,
                                 const Point& B,
                                 const Point& C,
                                 const Point& D,
-                                const Point& E) {
-    return triangle_area_abs(A, B, E) +
-           triangle_area_abs(B, C, E) +
-           triangle_area_abs(C, D, E);
+                                const Point& /*E*/) {
+    return std::fabs(triangle_signed_area(A, B, C) + triangle_signed_area(A, C, D));
 }
-
 } // namespace
 
 /**
@@ -137,6 +134,8 @@ double triangle_area_abs(const Point& a, const Point& b, const Point& c) {
 /**
  * Computes a candidate point E that preserves the area of the segment A-B-C-D.
  * The point E is placed on a line parallel to AD such that Area(AED) = Area(ABCD).
+ * To minimize displacement, E is placed on the extension of either AB or CD,
+ * whichever vertex (B or C) is further from the line AD.
  */
 CollapseCandidate compute_collapse_candidate(const Ring& ring, int start_index) {
     CollapseCandidate candidate{};
@@ -151,30 +150,37 @@ CollapseCandidate compute_collapse_candidate(const Ring& ring, int start_index) 
     const Point& C = ring.vertices[(start_index + 2) % n];
     const Point& D = ring.vertices[(start_index + 3) % n];
 
-    // Total area of the two triangles formed by A-B-C-D
-    const double target_signed_area =
-        triangle_signed_area(A, B, C) + triangle_signed_area(A, C, D);
+    // Total signed area of the quadrilateral ABCD
+    const double area_abcd = triangle_signed_area(A, B, C) + triangle_signed_area(A, C, D);
+    
+    // Signed areas of triangles formed with the base AD
+    const double area_abd = triangle_signed_area(A, B, D);
+    const double area_acd = triangle_signed_area(A, C, D);
 
     const double dx = D.x - A.x;
     const double dy = D.y - A.y;
-    const double len = std::sqrt(dx * dx + dy * dy);
+    const double len_sq = dx * dx + dy * dy;
 
-    if (len < EPS) {
+    if (len_sq < EPS * EPS) {
         return candidate;
     }
 
-    // Normal vector to AD
-    const double nx = -dy / len;
-    const double ny = dx / len;
-
-    // Calculate height required to preserve area: Area = 0.5 * base * height
-    const double signed_height = (-2.0 * target_signed_area) / len;
-
-    // Point E is A projected along the normal by the calculated height
-    Point E{
-        A.x + signed_height * nx,
-        A.y + signed_height * ny
-    };
+    Point E;
+    // Pick the peak vertex furthest from AD to minimize displacement
+    if (std::fabs(area_abd) >= std::fabs(area_acd)) {
+        if (std::fabs(area_abd) < EPS) {
+            // All points nearly collinear
+            E = Point{ (A.x + D.x) * 0.5, (A.y + D.y) * 0.5 };
+        } else {
+            // E lies on the line passing through AB
+            const double t = area_abcd / area_abd;
+            E = Point{ A.x + t * (B.x - A.x), A.y + t * (B.y - A.y) };
+        }
+    } else {
+        // E lies on the line passing through CD
+        const double t = area_abcd / area_acd;
+        E = Point{ D.x + t * (C.x - D.x), D.y + t * (C.y - D.y) };
+    }
 
     candidate.valid = true;
     candidate.e = E;
@@ -183,8 +189,8 @@ CollapseCandidate compute_collapse_candidate(const Ring& ring, int start_index) 
 
     if (DEBUG_LOG) {
         std::cerr << "[DEBUG] ring " << ring.ring_id
-                  << " target_signed_area=" << target_signed_area
-                  << " |AD|=" << len << "\n";
+                  << " area_abcd=" << area_abcd
+                  << " |AD|=" << std::sqrt(len_sq) << "\n";
         std::cerr << "[DEBUG] ring " << ring.ring_id
                   << " E=(" << E.x << ", " << E.y << ")"
                   << " displacement=" << candidate.areal_displacement << "\n";
@@ -197,41 +203,22 @@ CollapseCandidate compute_collapse_candidate(const Ring& ring, int start_index) 
  * Modifies the ring in-place to apply the chosen collapse.
  */
 void apply_collapse(Ring& ring, const CollapseCandidate& c) {
-    if (!c.valid) {
-        return;
-    }
-
+    if (!c.valid) return;
     const int n = static_cast<int>(ring.vertices.size());
-    if (n < 4) {
-        return;
-    }
-
+    if (n < 4) return;
     const int A = c.start_index % n;
     const int B = (A + 1) % n;
     const int C = (A + 2) % n;
-
-    std::vector<Point> new_vertices;
-    new_vertices.reserve(n - 1);
-
+    std::vector<Point> nv;
+    nv.reserve(n - 1);
     for (int i = 0; i < n; ++i) {
-        if (i == B || i == C) {
-            continue;
-        }
-
-        if (i == A) {
-            new_vertices.push_back(ring.vertices[A]);
-            new_vertices.push_back(c.e);
-        } else {
-            new_vertices.push_back(ring.vertices[i]);
-        }
+        if (i == B || i == C) continue;
+        nv.push_back(ring.vertices[i]);
+        if (i == A) nv.push_back(c.e);
     }
-
-    ring.vertices = std::move(new_vertices);
+    ring.vertices = std::move(nv);
 }
 
-/**
- * Checks if a collapse is valid within its own ring (no self-intersections).
- */
 bool is_valid_collapse(const Ring& ring, const CollapseCandidate& c) {
     const int n = static_cast<int>(ring.vertices.size());
     if (n < 4 || !c.valid) {
@@ -250,17 +237,16 @@ bool is_valid_collapse(const Ring& ring, const CollapseCandidate& c) {
     for (int i = 0; i < n; ++i) {
         const int j = (i + 1) % n;
 
-        // Skip edges that are being removed or share endpoints with new edges
-        if (i == A || i == B || i == C) continue;
-        if (j == A || j == B || j == C) continue;
+        // Skip only the three edges being removed: (A,B), (B,C), (C,D)
+        if ((i == A && j == B) || (i == B && j == C) || (i == C && j == D))
+            continue;
 
         const Point p = ring.vertices[i];
         const Point q = ring.vertices[j];
 
-        if (same_point(p, a) || same_point(p, d) ||
-            same_point(q, a) || same_point(q, d)) {
+        // Skip edges that share vertex A or D (adjacent to new edges)
+        if (same_point(p, a) || same_point(p, d) || same_point(q, a) || same_point(q, d))
             continue;
-        }
 
         // Check if new segments AE or ED intersect any existing edge
         if (segments_intersect(a, e, p, q)) return false;
