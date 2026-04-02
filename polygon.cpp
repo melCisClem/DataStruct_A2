@@ -10,7 +10,10 @@
 /**
  * Reads a polygon from a CSV file.
  * The CSV is expected to have a header: ring_id,vertex_id,x,y.
- * Uses a map to group vertices by ring_id and ensures they are stored in the original order.
+ * 
+ * Vertices are grouped into rings based on their ring_id. The ring_id is assumed
+ * to be an integer, and vertices within each ring are assumed to be listed in 
+ * sequential order in the input file.
  */
 Polygon read_polygon_csv(const std::string& filename) {
     std::ifstream fin(filename);
@@ -19,12 +22,12 @@ Polygon read_polygon_csv(const std::string& filename) {
     }
 
     std::string line;
-    // Skip header line
+    // Skip the header line (ring_id,vertex_id,x,y)
     if (!std::getline(fin, line)) {
         throw std::runtime_error("Input file is empty.");
     }
 
-    // Temporary map to collect rings by their ID
+    // Temporary map to collect rings by their ID. std::map keeps IDs sorted.
     std::map<int, Ring> ring_map;
 
     while (std::getline(fin, line)) {
@@ -39,29 +42,33 @@ Polygon read_polygon_csv(const std::string& filename) {
         double x = 0.0;
         double y = 0.0;
 
-        // Parse: ring_id, vertex_id, x, y
-        std::getline(ss, token, ',');
+        // Extract ring_id
+        if (!std::getline(ss, token, ',')) continue;
         ring_id = std::stoi(token);
 
-        std::getline(ss, token, ','); // vertex_id (unused, assumed sequential)
+        // vertex_id is skipped as we regenerate it sequentially on output
+        if (!std::getline(ss, token, ',')) continue;
         
-        std::getline(ss, token, ',');
+        // Extract x coordinate
+        if (!std::getline(ss, token, ',')) continue;
         x = std::stod(token);
 
-        std::getline(ss, token, ',');
+        // Extract y coordinate
+        if (!std::getline(ss, token, ',')) continue;
         y = std::stod(token);
 
-        // Initialize new ring if not encountered before
+        // Initialize new ring if this ID hasn't been seen yet
         if (ring_map.find(ring_id) == ring_map.end()) {
             Ring ring;
             ring.ring_id = ring_id;
             ring_map[ring_id] = ring;
         }
 
+        // Append vertex to the appropriate ring
         ring_map[ring_id].vertices.push_back({x, y});
     }
 
-    // Convert map to Polygon structure (vector of rings)
+    // Transfer rings from the sorted map to the Polygon's vector
     Polygon polygon;
     for (const auto& [id, ring] : ring_map) {
         polygon.rings.push_back(ring);
@@ -72,24 +79,28 @@ Polygon read_polygon_csv(const std::string& filename) {
 
 /**
  * Prints the polygon vertices in CSV format to standard output.
- * Vertex IDs are regenerated sequentially starting from 0 for each ring.
+ * 
+ * Vertex coordinates are printed with 3 decimal places in fixed notation.
+ * Vertex IDs are regenerated sequentially (0, 1, 2, ...) within each ring.
  */
 void print_polygon_csv(const Polygon& polygon) {
     std::cout << "ring_id,vertex_id,x,y\n";
-    std::cout << std::fixed << std::setprecision(10);
+    // Set fixed notation and 3 decimal places for coordinate output
+    std::cout << std::fixed << std::setprecision(3);
 
     for (const Ring& ring : polygon.rings) {
         for (std::size_t i = 0; i < ring.vertices.size(); ++i) {
             std::cout << ring.ring_id << ","
                       << i << ","
-                      << std::setprecision(9) << ring.vertices[i].x << ","
-                      << std::setprecision(9) << ring.vertices[i].y << "\n";
+                      << ring.vertices[i].x << ","
+                      << ring.vertices[i].y << "\n";
         }
     }
 }
 
 /**
  * Returns the total count of vertices across all rings in the polygon.
+ * Used to check against the target vertex count during simplification.
  */
 int total_vertex_count(const Polygon& polygon) {
     int total = 0;
