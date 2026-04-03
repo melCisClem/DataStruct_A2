@@ -80,13 +80,15 @@ Polygon read_polygon_csv(const std::string& filename) {
 /**
  * Prints the polygon vertices in CSV format to standard output.
  * 
- * Vertex coordinates are printed with 3 decimal places in fixed notation.
+ * Vertex coordinates are printed with high precision (10 decimal places) 
+ * to ensure consistency with calculated area and preservation metrics.
  * Vertex IDs are regenerated sequentially (0, 1, 2, ...) within each ring.
  */
 void print_polygon_csv(const Polygon& polygon) {
     std::cout << "ring_id,vertex_id,x,y\n";
-    // Set fixed notation and 3 decimal places for coordinate output
-    std::cout << std::fixed << std::setprecision(3);
+    // Set higher precision for coordinate output to ensure consistency with summary area.
+    // 10 decimal places should be sufficient for most cases.
+    std::cout << std::setprecision(10);
 
     for (const Ring& ring : polygon.rings) {
         for (std::size_t i = 0; i < ring.vertices.size(); ++i) {

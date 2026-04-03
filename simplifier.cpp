@@ -251,7 +251,9 @@ double exact_local_displacement(const Point& A, const Point& B, const Point& C, 
 CollapseCandidate compute_collapse_candidate(const Ring& ring, int start_index) {
     CollapseCandidate candidate{};
     const int n = static_cast<int>(ring.vertices.size());
-    if (n < 3) return candidate;
+    // A ring must have at least 4 vertices to be collapsed to 3.
+    // Collapsing a 3-vertex ring would result in a 2-vertex "ring" (a line).
+    if (n <= 3) return candidate;
 
     const Point& A = ring.vertices[start_index % n];
     const Point& B = ring.vertices[(start_index + 1) % n];
@@ -349,6 +351,9 @@ bool is_valid_collapse(const Polygon& poly, int ring_idx, const CollapseCandidat
     Rect bb_ed = Rect::from_segment(e, d);
     Rect bb_total = {std::min(bb_ae.min_x, bb_ed.min_x), std::min(bb_ae.min_y, bb_ed.min_y),
                      std::max(bb_ae.max_x, bb_ed.max_x), std::max(bb_ae.max_y, bb_ed.max_y)};
+
+    // Ensure the new segments AE and ED do not overlap (fold)
+    if (point_on_segment(a, e, d) || point_on_segment(d, a, e)) return false;
 
     // Query spatial index for potential intersecting segments
     for (const auto& ref : index.query(bb_total)) {
